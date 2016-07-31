@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<style>
+    body {
+        background-color: hsl(30, 20%, 95%)
+    }
+</style>
+
+<!-- references when using npm and chevrotain is installed node_modules/chevrotain-->
+<!--<link rel='stylesheet' href='../node_modules/chevrotain/diagrams/diagrams.css'>-->
+<!--<script src='../node_modules/chevrotain/diagrams/vendor/railroad-diagrams.js'></script>-->
+<!--<script src='../node_modules/chevrotain/lib/chevrotain.js'></script>-->
+<!--<script src='../node_modules/chevrotain/diagrams/src/diagrams_builder.js'></script>-->
+<!--<script src='../node_modules/chevrotain/diagrams/src/diagrams_behavior.js'></script>-->
+<!--<script src='../node_modules/chevrotain/diagrams/src/main.js'></script>-->
+
+
+<!-- These references will always download the latest version available on npm,
+     only use these if you actually intend to work on the latest version.-->
+<link rel='stylesheet' href='https://npmcdn.com/chevrotain/diagrams/diagrams.css'>
+<script src='https://npmcdn.com/chevrotain/diagrams/vendor/railroad-diagrams.js'></script>
+<script src='https://npmcdn.com/chevrotain/lib/chevrotain.js'></script>
+<!--// TODO: change back to get this from npmcdn once a version including the fix is out`-->
+<script src='../../../diagrams/src/diagrams_builder.js'></script>
+<script src='https://npmcdn.com/chevrotain/diagrams/src/diagrams_behavior.js'></script>
+<script src='https://npmcdn.com/chevrotain/diagrams/src/main.js'></script>
+
+<body>
+<div id="diagrams" align="center"></div>
+
+<script src='https://npmcdn.com/lodash/lodash.js'></script>
+<!-- DOCS: the template was modified to load javascript file which defines our Parser -->
+<script src='yaml_lexer.js'></script>
+<script src='yaml_parser.js'></script>
+
+<script>
+    // DOCS: the template was modified to instantiable the CssParser.
+    var parserInstanceToDraw = new YamlParser([]);
+
+    var diagramsDiv = document.getElementById("diagrams");
+
+    main.drawDiagramsFromParserInstance(parserInstanceToDraw, diagramsDiv)
+</script>
+</body>

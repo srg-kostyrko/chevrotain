@@ -78,7 +78,6 @@
     function createTerminalFromToken(tokenConstructor, occurrenceInParent, topRuleName, dslRuleName) {
         var result = Terminal(chevrotain.tokenLabel(tokenConstructor),
             undefined,
-            // PATTERN static property will not exist when using custom lexers (hand built or other lexer generators)
             tokenConstructor.PATTERN ? tokenConstructor.PATTERN.source : undefined,
             occurrenceInParent,
             topRuleName,
