@@ -21,7 +21,7 @@ import {
     keys,
     isArray
 } from "../utils/utils"
-import {isLazyTokenType, isSimpleTokenType} from "./tokens"
+import {isLazyTokenType, isSimpleTokenType, tokenIdxToClass} from "./tokens"
 
 const PATTERN = "PATTERN"
 export const DEFAULT_MODE = "defaultMode"
@@ -107,6 +107,74 @@ export function analyzeTokenClasses(tokenClasses:TokenConstructor[]):IAnalyzeRes
         emptyGroups:                   emptyGroups
     }
 }
+
+export function analyzeTokenClassesForStreamingLexer(allTokenClasses:TokenConstructor[]):any {
+
+    // TODO: Maybe this is an error, NA not supported on streaming
+    let onlyRelevantClasses = reject(allTokenClasses, (currClass) => {
+        return currClass[PATTERN] === Lexer.NA
+    })
+
+    let allTransformedPatterns = map(onlyRelevantClasses, (currClass) => {
+        return addStartOfInput(currClass[PATTERN])
+    })
+    let allTokenClassNames = map(onlyRelevantClasses, (currClass) => tokenName(currClass))
+
+    let allClassNamesToTransformedPattern = zipObject(allTokenClassNames, allTransformedPatterns)
+
+    let allGroups = map(onlyRelevantClasses, (currClass) => {
+        // TODO extract function of copy pasted code
+        let groupName = currClass.GROUP
+        if (groupName === Lexer.SKIPPED) {
+            return undefined
+        }
+        else if (isString(groupName)) {
+            return groupName
+        }
+        else if (isUndefined(groupName)) {
+            return "default"
+        }
+        else {
+            throw Error("non exhaustive match")
+        }
+    })
+
+    let allClassNamesToGroup = zipObject(allTokenClassNames, allGroups)
+
+
+    let allSkippedPatterns = reduce(onlyRelevantClasses, (result, currClass) => {
+        if (currClass.GROUP === Lexer.SKIPPED) {
+            result.push(allClassNamesToTransformedPattern[tokenName(currClass)])
+        }
+        return result
+    }, [])
+
+
+    forEach(allTokenClasses, (currTokClass, idx) => {
+        // TODO: why are we saving the idx?
+        currTokClass.idx = idx
+        currTokClass.TRANSFORMED_PATTERN = allClassNamesToTransformedPattern[tokenName(currTokClass)]
+    })
+
+    forEach(allTokenClasses, (currTokClass, idx) => {
+        // TODO: why are we saving the idx?
+        currTokClass.EXTENDING_TRANSFORMED_PATTERNS = map(currTokClass.extendingTokenTypes,
+            (tokType) => tokenIdxToClass.get(tokType).TRANSFORMED_PATTERN)
+    })
+
+    let idxToPattern = map(onlyRelevantClasses, (currTokClass) => {
+        return allClassNamesToTransformedPattern[tokenName(currTokClass)]
+    })
+
+
+    return {
+        tokenNameToPattern: allClassNamesToTransformedPattern,
+        tokenNameToGroup:   allClassNamesToGroup,
+        skippedPatterns:    allSkippedPatterns,
+        idxToPattern:       idxToPattern
+    }
+}
+
 
 export function validatePatterns(tokenClasses:TokenConstructor[], validModesNames:string[]):ILexerDefinitionError[] {
     let errors = []

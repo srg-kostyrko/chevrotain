@@ -1,5 +1,5 @@
 // requiring the development version
-var chevrotain = require("../../lib/chevrotain");
+var chevrotain = require("../../lib/src/api");
 
 // ----------------- lexer -----------------
 var extendToken = chevrotain.extendSimpleLazyToken;
@@ -24,6 +24,7 @@ WhiteSpace.GROUP = Lexer.SKIPPED; // marking WhiteSpace as 'SKIPPED' makes the l
 var allTokens = [WhiteSpace, StringLiteral, NumberLiteral, Comma, Colon, LCurly, RCurly, LSquare, RSquare, True, False, Null];
 var JsonLexer = new Lexer(allTokens);
 
+var streamingJsonLexer = new chevrotain.StreamingLexer(allTokens)
 
 // ----------------- parser -----------------
 
@@ -32,7 +33,8 @@ function JsonParserDev(input) {
     Parser.call(this, input, allTokens, {
             // by default the error recovery / fault tolerance capabilities are disabled
             // use this flag to enable them
-            recoveryEnabled: false
+            // recoveryEnabled: true,
+            lexerLess:       true
         }
     );
 
@@ -108,15 +110,15 @@ JsonParserDev.prototype.constructor = JsonParserDev;
 var parser = new JsonParserDev([]);
 
 module.exports = function(text, lexOnly) {
-    var lexResult = JsonLexer.tokenize(text);
-    if (lexResult.errors.length > 0) {
-        throw "Lexing errors encountered " + lexResult.errors[0].message
-    }
+    // var lexResult = JsonLexer.tokenize(text);
+    // if (lexResult.errors.length > 0) {
+    //     throw "Lexing errors encountered " + lexResult.errors[0].message
+    // }
 
     var value
     if (!lexOnly) {
         // setting a new input will RESET the parser instance's state.
-        parser.input = lexResult.tokens;
+        parser.input = text;
 
         // any top level rule may be used as an entry point
         value = parser.json();
@@ -128,7 +130,7 @@ module.exports = function(text, lexOnly) {
 
     return {
         value:       value, // this is a pure grammar, the value will always be <undefined>
-        lexErrors:   lexResult.errors,
+        // lexErrors:   lexResult.errors,
         parseErrors: parser.errors
     };
 };

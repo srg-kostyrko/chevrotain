@@ -151,6 +151,7 @@ export function buildLookaheadForAtLeastOneSep(optionOccurrence:number,
 export type Alternative = TokenConstructor[][]
 export type lookAheadSequence = TokenConstructor[][]
 
+// TODO refactor into multiple functions
 export function buildAlternativesLookAheadFunc(alts:lookAheadSequence[],
                                                hasPredicates:boolean,
                                                tokenMatcher:TokenMatcher,
@@ -164,8 +165,96 @@ export function buildAlternativesLookAheadFunc(alts:lookAheadSequence[],
         })
     })
 
+    let lexerLess = true
+    if (lexerLess) {
+
+        if (hasPredicates) {
+
+            /**
+             * @returns {number} - The chosen alternative index
+             */
+            return function (orAlts:IAnyOrAlt<any>[]):number {
+
+                // unfortunately the predicates must be extracted every single time
+                // as they cannot be cached due to keep references to parameters(vars) which are no longer valid.
+                // note that in the common case of no predicates, no cpu time will be wasted on this (see else block)
+                let predicates:Predicate[] = map(orAlts, (currAlt) => currAlt.GATE)
+
+                for (let t = 0; t < numOfAlts; t++) {
+
+                    let currPredicate = predicates[t]
+                    if (currPredicate && !currPredicate.call(this)) {
+                        // if the predicate does not match there is no point in checking the paths
+                        continue
+                    }
+
+                    let currAlt = alts[t]
+                    let currNumOfPaths = currAlt.length
+                    for (let j = 0; j < currNumOfPaths; j++) {
+                        let currPath = currAlt[j]
+                        if (this.LA_STREAM_SEQ(currPath)) {
+                            return t
+                        }
+                    }
+                    // none of the paths for the current alternative matched
+                    // try the next alternative
+                }
+                // none of the alternatives could be matched
+                return -1
+            }
+        }
+        else if (areAllOneTokenLookahead) {
+            let singleTokenAlts = map(alts, (currAlt) => {
+                return flatten(currAlt)
+            })
+
+            /**
+             * @returns {number} - The chosen alternative index
+             */
+            return function ():number {
+
+                for (let t = 0; t < numOfAlts; t++) {
+                    let currSingleTokens = singleTokenAlts[t]
+                    let numberOfPossibleTokens = currSingleTokens.length
+                    for (let j = 0; j < numberOfPossibleTokens; j++) {
+                        let currExpectedToken = currSingleTokens[j]
+                        if (this.LA_STREAM(currExpectedToken)) {
+                            return t
+                        }
+                    }
+                    // none of the paths for the current alternative matched
+                    // try the next alternative
+                }
+                // none of the alternatives could be matched
+                return -1
+            }
+        }
+        // multiple tokens lookahead
+        else {
+            /**
+             * @returns {number} - The chosen alternative index
+             */
+            return function ():number {
+
+                for (let t = 0; t < numOfAlts; t++) {
+                    let currAlt = alts[t]
+                    let currNumOfPaths = currAlt.length
+                    for (let j = 0; j < currNumOfPaths; j++) {
+                        let currPath = currAlt[j]
+                        if (this.LA_STREAM_SEQ(currPath)) {
+                            return t
+                        }
+                    }
+                    // none of the paths for the current alternative matched
+                    // try the next alternative
+                }
+                // none of the alternatives could be matched
+                return -1
+            }
+        }
+    }
     // This version takes into account the predicates as well.
-    if (hasPredicates) {
+    else if (hasPredicates) {
         /**
          * @returns {number} - The chosen alternative index
          */
@@ -273,6 +362,7 @@ export function buildAlternativesLookAheadFunc(alts:lookAheadSequence[],
     }
 }
 
+// TODO: refactor this and extract to multiple functions
 export function buildSingleAlternativeLookaheadFunction(alt:lookAheadSequence,
                                                         tokenMatcher:TokenMatcher,
                                                         tokenClassIdentityFunc:TokenClassIdentityFunc,
@@ -285,6 +375,42 @@ export function buildSingleAlternativeLookaheadFunction(alt:lookAheadSequence,
 
     let numOfPaths = alt.length
 
+    let lexerless = true
+    if (lexerless) {
+        if (areAllOneTokenLookahead) {
+            let singleTokens = flatten(alt)
+
+            return function ():boolean {
+                for (let j = 0; j < singleTokens.length; j++) {
+                    let currPossibleTok = singleTokens[j]
+                    if (this.LA_STREAM(currPossibleTok)) {
+                        return true
+                    }
+                }
+                // none of the paths matched
+                return false
+            }
+        }
+        else {
+            /**
+             * @returns {number} - The chosen alternative index
+             */
+            return function ():boolean {
+
+                let currNumOfPaths = alt.length
+                for (let j = 0; j < currNumOfPaths; j++) {
+                    let currPath = alt[j]
+                    if (this.LA_STREAM_SEQ(currPath)) {
+                        return true
+                    }
+                }
+                // none of the paths for the current alternative matched
+                // try the next alternative
+                // none of the alternatives could be matched
+                return false
+            }
+        }
+    }
     // optimized (common) case of all the lookaheads paths requiring only
     // a single token lookahead.
     if (areAllOneTokenLookahead && !dynamicTokensEnabled) {

@@ -2,7 +2,10 @@ import * as cache from "./cache"
 import {exceptions} from "./exceptions_public"
 import {classNameFromInstance, HashTable} from "../lang/lang_extensions"
 import {resolveGrammar} from "./grammar/resolver"
-import {validateGrammar, validateRuleName, validateRuleDoesNotAlreadyExist, validateRuleIsOverridden} from "./grammar/checks"
+import {
+    validateGrammar, validateRuleName, validateRuleDoesNotAlreadyExist, validateRuleIsOverridden,
+    validateRecoveryConfig
+} from "./grammar/checks"
 import {
     isEmpty,
     map,
@@ -51,7 +54,7 @@ import {
     getLookaheadPathsForOptionalProd,
     PROD_TYPE
 } from "./grammar/lookahead"
-import {TokenConstructor} from "../scan/lexer_public"
+import {TokenConstructor, StreamingLexer} from "../scan/lexer_public"
 import {buildTopProduction} from "./gast_builder"
 import {
     NextAfterTokenWalker,
@@ -85,14 +88,15 @@ export enum ParserDefinitionErrorType {
     UNRESOLVED_SUBRULE_REF,
     LEFT_RECURSION,
     NONE_LAST_EMPTY_ALT,
-    AMBIGUOUS_ALTS
+    AMBIGUOUS_ALTS,
+    LEXERLESS_WITH_RECOVERY_ENABLED
 }
 
 export type IgnoredRuleIssues = { [dslNameAndOccurrence:string]:boolean }
 export type IgnoredParserIssues = { [ruleName:string]:IgnoredRuleIssues }
 
 const IN_RULE_RECOVERY_EXCEPTION = "InRuleRecoveryException"
-const END_OF_FILE = new EOF();
+export const END_OF_FILE = new EOF();
 (<any>END_OF_FILE).tokenType = (<any>EOF).tokenType
 Object.freeze(END_OF_FILE)
 
@@ -156,13 +160,21 @@ export interface IParserConfig {
      * During Parser initialization.
      */
     dynamicTokensEnabled?:boolean
+
+
+    /**
+     * TODO: docs
+     */
+    lexerLess?: boolean
+
 }
 
 const DEFAULT_PARSER_CONFIG:IParserConfig = Object.freeze({
     recoveryEnabled:      false,
     maxLookahead:         5,
     ignoredIssues:        <any>{},
-    dynamicTokensEnabled: false
+    dynamicTokensEnabled: false,
+    lexerLess: false
 })
 
 export interface IRuleConfig<T> {
@@ -389,6 +401,8 @@ export class Parser {
     protected dynamicTokensEnabled:boolean
     protected maxLookahead:number
     protected ignoredIssues:IgnoredParserIssues
+    protected lexerLess:boolean
+    protected streamingLexer
 
     protected _input:Token[] = []
     protected inputIdx = -1
@@ -444,6 +458,10 @@ export class Parser {
             config.ignoredIssues :
             DEFAULT_PARSER_CONFIG.ignoredIssues
 
+        this.lexerLess = has(config, "lexerLess") ?
+            config.lexerLess :
+            DEFAULT_PARSER_CONFIG.lexerLess
+
         this.className = classNameFromInstance(this)
         this.firstAfterRepMap = cache.getFirstAfterRepForClass(this.className)
         this.classLAFuncs = cache.getLookaheadFuncsForClass(this.className)
@@ -455,6 +473,9 @@ export class Parser {
         else {
             this.definitionErrors = cache.CLASS_TO_DEFINITION_ERRORS.get(this.className)
         }
+
+        let configErrors = validateRecoveryConfig(this.recoveryEnabled, this.lexerLess)
+        this.definitionErrors.push.apply(this.definitionErrors, configErrors)
 
         if (isArray(tokensMapOrArr)) {
             this.tokensMap = <any>reduce(<any>tokensMapOrArr, (acc, tokenClazz:TokenConstructor) => {
@@ -495,6 +516,11 @@ export class Parser {
         // We cannot assume that the Token classes were created using the "extendToken" utilities
         // Therefore we must augment the Token classes both on Lexer initialization and on Parser initialization
         augmentTokenClasses(values(this.tokensMap))
+
+        if (this.lexerLess) {
+            this.streamingLexer = new StreamingLexer(<any>tokensMapOrArr, "")
+            // TODO: logic here
+        }
     }
 
     public get errors():exceptions.IRecognitionException[] {
@@ -505,7 +531,12 @@ export class Parser {
         this._errors = newErrors
     }
 
+    // TODO: Token[] | string ?
     public set input(newInput:Token[]) {
+        if (this.lexerLess) {
+            this.streamingLexer.setInput(<any>newInput)
+        }
+
         this.reset()
         this._input = newInput
     }
@@ -528,8 +559,15 @@ export class Parser {
         this.RULE_OCCURRENCE_STACK = []
     }
 
+    // TODO: PERF BOOST: dynamically replace this according to lexerless ON/OFF ?
+    // evaluate perf impact first
     public isAtEndOfInput():boolean {
-        return this.tokenMatcher(this.LA(1), EOF)
+        if (this.lexerLess)  {
+            return this.streamingLexer.isAtEndOfInput()
+        }
+        else {
+            return this.tokenMatcher(this.LA(1), EOF)
+        }
     }
 
     public getGAstProductions():HashTable<gast.Rule> {
@@ -1227,9 +1265,9 @@ export class Parser {
         this.RULE_OCCURRENCE_STACK.pop()
 
         if ((this.RULE_STACK.length === 0) && !this.isAtEndOfInput()) {
-            let firstRedundantTok = this.LA(1)
+            let firstRedundantTok = this.lexerLess ? undefined : this.LA(1)
             this.SAVE_ERROR(new exceptions.NotAllInputParsedException(
-                "Redundant input, expecting EOF but found: " + getImage(firstRedundantTok), firstRedundantTok))
+                "Redundant input, expecting EOF but found: " + this.getNextActualInput(), firstRedundantTok))
         }
     }
 
@@ -1280,17 +1318,18 @@ export class Parser {
     }
 
     /**
-     * @param {Token} actualToken - The actual unexpected (mismatched) Token instance encountered.
+     * @param {string} nextActualInput - The actual unexpected (mismatched) text encountered.
      * @param {Function} expectedTokType - The Class of the expected Token.
      * @returns {string} - The error message saved as part of a MismatchedTokenException.
      */
-    protected getMisMatchTokenErrorMessage(expectedTokType:TokenConstructor, actualToken:ISimpleTokenOrIToken):string {
+    protected getMisMatchTokenErrorMessage(expectedTokType:TokenConstructor, nextActualInput:string):string {
+
         let hasLabel = hasTokenLabel(expectedTokType)
         let expectedMsg = hasLabel ?
             `--> ${tokenLabel(expectedTokType)} <--` :
             `token of type --> ${tokenName(expectedTokType)} <--`
 
-        let msg = `Expecting ${expectedMsg} but found --> '${getImage(actualToken)}' <--`
+        let msg = `Expecting ${expectedMsg} but found --> '${nextActualInput}' <--`
 
         return msg
     }
@@ -1395,8 +1434,19 @@ export class Parser {
         }
     }
 
+    protected LA_STREAM(expectedTokType:TokenConstructor):Token {
+        return this.streamingLexer.lookAhead(expectedTokType)
+    }
+
+    protected LA_STREAM_SEQ(expectedPath:TokenConstructor[]):Token {
+        return this.streamingLexer.lookAheadSequence(expectedPath)
+    }
+
     protected consumeToken() {
-        this.inputIdx++
+        // TODO: conditional depending on lexerless mode?
+        // TODO: configurable at parser startup?
+        this.streamingLexer.consumeToken()
+        // this.inputIdx++
     }
 
     protected saveLexerState() {
@@ -1553,7 +1603,7 @@ export class Parser {
         let generateErrorMessage = () => {
             // we are preemptively re-syncing before an error has been detected, therefor we must reproduce
             // the error that would have been thrown
-            let msg = this.getMisMatchTokenErrorMessage(expectedTokType, nextTokenWithoutResync)
+            let msg = this.getMisMatchTokenErrorMessage(expectedTokType, getImage(nextTokenWithoutResync))
             let error = new exceptions.MismatchedTokenException(msg, nextTokenWithoutResync)
             // the first token here will be the original cause of the error, this is not part of the resyncedTokens property.
             error.resyncedTokens = dropRight(resyncedTokens)
@@ -1860,7 +1910,11 @@ export class Parser {
         if (firstIterationLookaheadFunc.call(this)) {
             (<GrammarAction>action).call(this)
 
-            let separatorLookAheadFunc = () => {return this.tokenMatcher(this.LA(1), separator)}
+            // TODO: lexerless matcher?
+            let separatorLookAheadFunc = () => {return this.LA_STREAM(separator) !== null}
+
+            // let separatorLookAheadFunc = () => {return this.tokenMatcher(this.LA(1), separator)}
+
             // 2nd..nth iterations
             while (separatorLookAheadFunc()) {
                 // note that this CONSUME will never enter recovery because
@@ -1928,7 +1982,11 @@ export class Parser {
         if (firstIterationLaFunc.call(this)) {
             action.call(this)
 
-            let separatorLookAheadFunc = () => {return this.tokenMatcher(this.LA(1), separator)}
+            let separatorLookAheadFunc = () => {return this.LA_STREAM(separator) !== null}
+
+            // TODO: custom lexerless tokenMatcer?
+            // let separatorLookAheadFunc = () => {return this.tokenMatcher(this.LA(1), separator)}
+
             // 2nd..nth iterations
             while (separatorLookAheadFunc()) {
                 // note that this CONSUME will never enter recovery because
@@ -1994,8 +2052,13 @@ export class Parser {
 
     // to enable optimizations this logic has been extract to a method as its invoker contains try/catch
     private consumeInternalOptimized(expectedTokClass:TokenConstructor):ISimpleTokenOrIToken {
-        let nextToken = this.LA(1)
-        if (this.tokenMatcher(nextToken, expectedTokClass)) {
+        let nextToken = this.streamingLexer.lookAhead(expectedTokClass)
+
+        // TODO: why does this.LA(1) not redirect ?
+        // let nextToken = this.LA(1)
+        // TODO: don't need to recheck in lexerless mode
+        // if (this.tokenMatcher(nextToken, expectedTokClass)) {
+        if (nextToken !== null) {
             this.consumeToken()
             return nextToken
         }
@@ -2067,7 +2130,7 @@ export class Parser {
 
     // TODO: consider caching the error message computed information
     private raiseNoAltException(occurrence:number, errMsgTypes:string):void {
-        let errSuffix = " but found: '" + getImage(this.LA(1)) + "'"
+        let errSuffix = " but found: '" + this.getNextActualInput() + "'"
         if (errMsgTypes === undefined) {
             let ruleName = this.getCurrRuleFullName()
             let ruleGrammar = this.getGAstProductions().get(ruleName)
@@ -2096,7 +2159,7 @@ export class Parser {
             let ruleName = this.getCurrRuleFullName()
             let ruleGrammar = this.getGAstProductions().get(ruleName)
             laFunc = laFuncBuilder.apply(null,
-                //TODO: change
+                //TODO: change (add lexerless flag)
                 [occurrence, ruleGrammar, maxLookahead, this.tokenMatcher,
                     this.tokenClassIdentityFunc, this.tokenInstanceIdentityFunc, this.dynamicTokensEnabled])
             this.classLAFuncs.put(key, laFunc)
@@ -2111,7 +2174,7 @@ export class Parser {
     private raiseEarlyExitException(occurrence:number,
                                     prodType:PROD_TYPE,
                                     userDefinedErrMsg:string):void {
-        let errSuffix = " but found: '" + getImage(this.LA(1)) + "'"
+        let errSuffix = " but found: '" + this.getNextActualInput() + "'"
         if (userDefinedErrMsg === undefined) {
             let ruleName = this.getCurrRuleFullName()
             let ruleGrammar = this.getGAstProductions().get(ruleName)
@@ -2126,6 +2189,15 @@ export class Parser {
             userDefinedErrMsg = `Expecting at least one ${userDefinedErrMsg}`
         }
         throw this.SAVE_ERROR(new exceptions.EarlyExitException(userDefinedErrMsg + errSuffix, this.LA(1)))
+    }
+
+    private getNextActualInput():string {
+        if (this.lexerLess) {
+            return this.streamingLexer.getNextActualInput()
+        }
+        else {
+            return getImage(this.LA(1))
+        }
     }
 }
 

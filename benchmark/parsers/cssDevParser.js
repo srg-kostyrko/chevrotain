@@ -1,5 +1,7 @@
 var XRegExp = require("xregexp");
-var chevrotain = require("../../lib/chevrotain");
+// var chevrotain = require("../../examples/grammars/node_modules/chevrotain/lib/chevrotain");
+
+var chevrotain = require("../../lib/src/api");
 
 // ----------------- lexer -----------------
 var Lexer = chevrotain.Lexer;
@@ -147,7 +149,9 @@ var CssLexer = new Lexer(cssTokens);
 // ----------------- parser -----------------
 
 function CssParser(input) {
-    Parser.call(this, input, cssTokens);
+    Parser.call(this, input, cssTokens,
+        {lexerLess: true}
+    );
     var $ = this;
 
     this.stylesheet = this.RULE('stylesheet', function() {
@@ -194,8 +198,12 @@ function CssParser(input) {
         // @formatter:off
             $.MANY(function () {
                 $.OR([
-                    {ALT: function() { $.CONSUME(Cdo)}},
-                    {ALT: function() { $.CONSUME(Cdc)}}
+                    {ALT: function() {
+                              $.CONSUME(Cdo)
+                          }},
+                    {ALT: function() {
+                              $.CONSUME(Cdc)
+                          }}
                 ]);
             })
             // @formatter:on
@@ -337,16 +345,16 @@ function CssParser(input) {
         // @formatter:off
             $.OR([
                 {ALT: function() {
+                    $.AT_LEAST_ONE(function() {
+                        $.SUBRULE2($.simple_selector_suffix)
+                    }, "selector suffix")
+                }},
+                {ALT: function() {
                     $.SUBRULE($.element_name)
                     $.MANY(function() {
                         $.SUBRULE($.simple_selector_suffix)
                     })
 
-                }},
-                {ALT: function() {
-                    $.AT_LEAST_ONE(function() {
-                        $.SUBRULE2($.simple_selector_suffix)
-                    }, "selector suffix")
                 }}
             ]);
             // @formatter:on
@@ -375,7 +383,9 @@ function CssParser(input) {
     this.element_name = this.RULE('element_name', function() {
         // @formatter:off
             $.OR([
-                {ALT: function() { $.CONSUME(Ident) }},
+                {ALT: function() {
+                $.CONSUME(Ident)
+            }},
                 {ALT: function() { $.CONSUME(Star) }}
             ]);
             // @formatter:on
@@ -409,15 +419,16 @@ function CssParser(input) {
         // @formatter:off
             $.OR([
                 {ALT: function() {
-                    $.CONSUME(Ident)
-                }},
-                {ALT: function() {
                     $.CONSUME(Func)
                     $.OPTION(function() {
                         $.CONSUME2(Ident)
                     })
                     $.CONSUME(RParen)
+                }},
+                {ALT: function() {
+                    $.CONSUME(Ident)
                 }}
+
             ]);
             // @formatter:on
     });
@@ -459,22 +470,22 @@ function CssParser(input) {
         })
 
         // @formatter:off
-            $.OR([
-                {ALT: function() { $.CONSUME(Num) }},
-                {ALT: function() { $.CONSUME(Percentage) }},
-                {ALT: function() { $.CONSUME(Length) }},
-                {ALT: function() { $.CONSUME(Ems) }},
-                {ALT: function() { $.CONSUME(Exs) }},
-                {ALT: function() { $.CONSUME(Angle) }},
-                {ALT: function() { $.CONSUME(Time) }},
-                {ALT: function() { $.CONSUME(Freq) }},
-                {ALT: function() { $.CONSUME(StringLiteral) }},
-                {ALT: function() { $.CONSUME(Ident) }},
-                {ALT: function() { $.CONSUME(Uri) }},
-                {ALT: function() { $.SUBRULE($.hexcolor) }},
-                {ALT: function() { $.SUBRULE($.cssFunction) }}
-            ]);
-            // @formatter:on
+        $.OR([
+            {ALT: function() { $.CONSUME(Uri) }},
+            {ALT: function() { $.SUBRULE($.cssFunction) }},
+            {ALT: function() { $.CONSUME(Ident) }},
+            {ALT: function() { $.CONSUME(Length) }},
+            {ALT: function() { $.CONSUME(Percentage) }},
+            {ALT: function() { $.CONSUME(Ems) }},
+            {ALT: function() { $.CONSUME(Exs) }},
+            {ALT: function() { $.CONSUME(Angle) }},
+            {ALT: function() { $.CONSUME(Time) }},
+            {ALT: function() { $.CONSUME(Freq) }},
+            {ALT: function() { $.CONSUME(StringLiteral) }},
+            {ALT: function() { $.SUBRULE($.hexcolor) }},
+            {ALT: function() { $.CONSUME(Num) }}
+        ]);
+        // @formatter:on
     });
 
     // FUNCTION S* expr ')' S*
@@ -503,17 +514,19 @@ CssParser.prototype.constructor = CssParser;
 // reuse the same parser instance.
 var parser = new CssParser([]);
 
-module.exports = function (text, lexOnly) {
-    var lexResult = CssLexer.tokenize(text);
-    if (lexResult.errors.length > 0) {
-        throw "Lexing errors encountered " + lexResult.errors[0].message
-    }
+var i = 0
+module.exports = function(text, lexOnly) {
+    // var lexResult = CssLexer.tokenize(text);
+    // if (lexResult.errors.length > 0) {
+    //     throw "Lexing errors encountered " + lexResult.errors[0].message
+    // }
 
     var value
     if (!lexOnly) {
         // setting a new input will RESET the parser instance's state.
-        parser.input = lexResult.tokens;
+        parser.input = text;
 
+        // parser.input = lexResult.tokens
         // any top level rule may be used as an entry point
         value = parser.stylesheet();
 
@@ -524,9 +537,10 @@ module.exports = function (text, lexOnly) {
         }
     }
 
+    i++
     return {
         value:       value, // this is a pure grammar, the value will always be <undefined>
-        lexErrors:   lexResult.errors,
+        // lexErrors:   lexResult.errors,
         parseErrors: parser.errors
     };
 };

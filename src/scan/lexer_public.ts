@@ -1,7 +1,14 @@
 import {Token, LazyTokenCacheData, getImage, getStartLine, getStartColumn, ISimpleTokenOrIToken} from "./tokens_public"
 import {
-    validatePatterns, analyzeTokenClasses, countLineTerminators, DEFAULT_MODE, performRuntimeChecks, checkLazyMode,
-    checkSimpleMode, cloneEmptyGroups
+    validatePatterns,
+    analyzeTokenClasses,
+    countLineTerminators,
+    DEFAULT_MODE,
+    performRuntimeChecks,
+    checkLazyMode,
+    analyzeTokenClassesForStreamingLexer,
+    checkSimpleMode,
+    cloneEmptyGroups
 } from "./lexer"
 import {
     cloneObj,
@@ -19,8 +26,14 @@ import {
     mapValues
 } from "../utils/utils"
 import {
-    fillUpLineToOffset, getStartColumnFromLineToOffset, getStartLineFromLineToOffset, augmentTokenClasses,
-    createSimpleLazyToken, LazyTokenCreator, createLazyTokenInstance
+    fillUpLineToOffset,
+    getStartColumnFromLineToOffset,
+    getStartLineFromLineToOffset,
+    augmentTokenClasses,
+    createSimpleLazyToken,
+    LazyTokenCreator,
+    createLazyTokenInstance,
+    tokenStructuredMatcher
 } from "./tokens"
 
 export interface TokenConstructor extends Function {
@@ -31,6 +44,7 @@ export interface TokenConstructor extends Function {
 
     tokenType?:number
     extendingTokenTypes?:number[]
+    TRANSFORMED_PATTERN?:RegExp
 
     new(...args:any[]):ISimpleTokenOrIToken
 }
@@ -634,4 +648,271 @@ export class Lexer {
 
         return {tokens: matchedTokens, groups: groups, errors: errors}
     }
+}
+
+// Done:
+// * multiple tokens lookahead (sequence lookahead) - V
+// * lexerless lookahead with predicates - V
+// * can't combine lexerless and recovery enabled - V
+// * error recovery (or at least properly disable it (including top level) - V
+//   - may need to change behavior of top level recovery - V
+// * error messages (show first none ignored char?) - V
+// * ruleFinallyClause - V
+
+// Minimal
+// * removed hard coded lexerless = true and pass params
+// * Support all Token types
+// * only concrete tokens in "extending_transformed_patterns"
+// * Streaming Lexer definition errors handling
+// * EOF handling from streamingLexer (currently return "null") but this is a different behavior.
+// * Better skipping support
+// * refactor to reduce code duplication.
+// * Testing
+
+// future milestones
+// * Token groups
+// * Relative order of inheriting TokenTypes?
+// * relative order of groups(including skipped) and other tokens.
+// * order of skipped patterns
+
+
+// not supported (document)
+// * Longer Alt ???
+
+
+export class StreamingLexer {
+
+    public lexerDefinitionErrors = []
+    public tokenNameToPattern:{[tokenName:string]:RegExp}
+    public tokenNameToGroup:{[tokenName:string]:string}
+    public idxToPattern:{[tokenIdx:number]:RegExp}
+    public skippedPatterns:RegExp[]
+    public cacheData:LazyTokenCacheData
+    public lastToken:ISimpleTokenOrIToken
+    public lastLength:number
+    public lastImage:string
+    public skipped = false
+
+    protected offset = 0
+    protected nextOffset = 0
+
+
+    constructor(public definition:SingleModeLexerDefinition, public text:string) {
+        this.lexerDefinitionErrors = validatePatterns(definition, [])
+
+        // If definition errors were encountered, the analysis phase may fail unexpectedly/
+        // Considering a lexer with definition errors may never be used, there is no point
+        // to performing the analysis anyhow...
+        if (isEmpty(this.lexerDefinitionErrors)) {
+            let analyzeResult = analyzeTokenClassesForStreamingLexer(definition)
+            this.tokenNameToPattern = analyzeResult.tokenNameToPattern
+            this.tokenNameToGroup = analyzeResult.tokenNameToGroup
+            this.skippedPatterns = analyzeResult.skippedPatterns
+            this.idxToPattern = analyzeResult.idxToPattern
+        }
+
+        this.cacheData = {
+            orgText:      text,
+            lineToOffset: []
+        }
+        // TODO: throw error if we have definition errors
+    }
+
+    lookAhead(expectedTokType:TokenConstructor):ISimpleTokenOrIToken {
+
+        if (this.text.length === 0) {
+            return null
+            // return END_OF_FILE
+        }
+
+        if (this.lastToken !== null && tokenStructuredMatcher(this.lastToken, expectedTokType)) {
+            return this.lastToken
+        }
+
+        if (this.skipped === false) {
+            // TODO: this skipping loop is incorrect, need to use a "while" and exit only after a full loop did not match anything
+            for (let i = 0; i < this.skippedPatterns.length; i++) {
+                let currSkippedPattern = this.skippedPatterns[0]
+                let skippedMatched = currSkippedPattern.exec(this.text)
+                if (skippedMatched) {
+                    let matchedImage = skippedMatched[0]
+                    let skippedImageLength = matchedImage.length
+                    this.text = this.text.slice(skippedImageLength)
+                    this.offset = this.offset + skippedImageLength
+                }
+            }
+
+            this.skipped = true
+        }
+
+        // let expectedTokenName = tokenName(expectedTokType)
+        // let expectedTokenName = expectedTokType.name
+        // let expectedTokenPattern = this.idxToPattern[(<any>expectedTokType).idx]
+        let expectedTokenPattern = (<any>expectedTokType).TRANSFORMED_PATTERN
+
+        let match = null
+        if (expectedTokenPattern) {
+            match = expectedTokenPattern.exec(this.text)
+        }
+        // TODO: need cleaner code to find patterns to match
+        // TODO: do the extending patterns have a meaningful order?
+        else {
+            let extendingPatterns = (<any>expectedTokType).EXTENDING_TRANSFORMED_PATTERNS
+            for (let i = 0; i < extendingPatterns.length; i++) {
+                match = extendingPatterns[i].exec(this.text)
+                if (match !== null) {
+                    break
+                }
+            }
+        }
+
+        // successful match
+        if (match !== null) {
+            let matchedImage = match[0]
+            let imageLength = matchedImage.length
+            this.lastLength = imageLength
+            let nextOffset = this.offset + imageLength
+            this.nextOffset = nextOffset
+
+            this.lastToken = createSimpleLazyToken(this.offset, nextOffset - 1, expectedTokType, this.cacheData)
+            return this.lastToken
+        }
+        else {
+            return null
+        }
+    }
+
+    lookAheadSequence(expectedTokTypes:TokenConstructor[]):boolean {
+
+        let text = this.text
+        let offset = this.offset
+
+        for (let currTokIdx = 0; currTokIdx < expectedTokTypes.length; currTokIdx++) {
+            if (this.text.length === 0) {
+                return false
+            }
+
+            // TODO: perf boost: use previous "skipped flag" information on first iteration?
+            // skipped Tokens may appear between any two tokens in the sequence
+            // TODO: this skipping loop is incorrect, need to use a "while" and exit only after a full loop did not match anything
+            for (let i = 0; i < this.skippedPatterns.length; i++) {
+                let currSkippedPattern = this.skippedPatterns[0]
+                let skippedMatched = currSkippedPattern.exec(text)
+                if (skippedMatched) {
+                    let matchedImage = skippedMatched[0]
+                    let skippedImageLength = matchedImage.length
+                    text = text.slice(skippedImageLength)
+                    offset = offset + skippedImageLength
+                }
+            }
+
+            let expectedTokType = expectedTokTypes[currTokIdx]
+            let expectedTokenPattern = (<any>expectedTokType).TRANSFORMED_PATTERN
+
+            let match = null
+            if (expectedTokenPattern) {
+                match = expectedTokenPattern.exec(text)
+            }
+
+            // TODO: need cleaner code to find patterns to match
+            // TODO: do the extending patterns have a meaningful order?
+            else {
+                let extendingPatterns = (<any>expectedTokType).EXTENDING_TRANSFORMED_PATTERNS
+                for (let i = 0; i < extendingPatterns.length; i++) {
+                    match = extendingPatterns[i].exec(text)
+                    if (match !== null) {
+                        break
+                    }
+                }
+            }
+
+            // successful match
+            if (match !== null) {
+                let matchedImage = match[0]
+                let imageLength = matchedImage.length
+                offset = offset + matchedImage.length
+                text = text.slice(imageLength)
+            } else {
+                return false
+            }
+        }
+        return true
+    }
+
+    consumeToken():void {
+        let lastImageLength = this.lastLength
+        this.text = this.text.slice(lastImageLength)
+        this.offset = this.nextOffset
+        this.lastToken = null
+        this.skipped = false
+    }
+
+    // TODO use this in the constructor to avoid duplication.
+    setInput(newText:string):void {
+        this.text = newText
+        this.offset = 0
+        this.cacheData = {
+            orgText:      newText,
+            lineToOffset: []
+        }
+        this.lastToken = null
+        this.lastImage = null
+        this.skipped = false
+    }
+
+    getNextActualInput():string {
+        if (this.text.length === 0) {
+            return ""
+        }
+
+        let text = this.text
+        let offset = this.offset
+
+        // skipped Tokens may appear between any two tokens in the sequence
+        // TODO: reuse code, stop copy pasting!
+        // TODO: this skipping loop is incorrect, need to use a "while" and exit only after a full loop did not match anything
+        for (let i = 0; i < this.skippedPatterns.length; i++) {
+            let currSkippedPattern = this.skippedPatterns[0]
+            let skippedMatched = currSkippedPattern.exec(text)
+            if (skippedMatched) {
+                let matchedImage = skippedMatched[0]
+                let skippedImageLength = matchedImage.length
+                text = text.slice(skippedImageLength)
+                offset = offset + skippedImageLength
+            }
+        }
+
+        if (text.length === 0) {
+            return ""
+        } else {
+            return text[0]
+        }
+    }
+
+    isAtEndOfInput():boolean {
+
+        if (this.text === "") {
+            return true
+        }
+        else {
+            if (this.skipped === false) {
+                // TODO: this skipping loop is incorrect, need to use a "while" and exit only after a full loop did not match anything
+                for (let i = 0; i < this.skippedPatterns.length; i++) {
+                    let currSkippedPattern = this.skippedPatterns[0]
+                    let skippedMatched = currSkippedPattern.exec(this.text)
+                    if (skippedMatched) {
+                        let matchedImage = skippedMatched[0]
+                        let skippedImageLength = matchedImage.length
+                        this.text = this.text.slice(skippedImageLength)
+                        this.offset = this.offset + skippedImageLength
+                    }
+                }
+
+                this.skipped = true
+                return this.text === ""
+            }
+        }
+        return false
+    }
+
 }

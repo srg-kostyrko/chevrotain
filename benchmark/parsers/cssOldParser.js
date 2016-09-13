@@ -145,7 +145,7 @@ var Num = extendToken('Num', MAKE_PATTERN('{{num}}'));
 var CssLexer = new Lexer(cssTokens);
 
 // ----------------- parser -----------------
-
+var i = 0
 function CssParser(input) {
     Parser.call(this, input, cssTokens);
     var $ = this;

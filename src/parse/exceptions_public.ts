@@ -74,7 +74,7 @@ export namespace exceptions {
 
     NoViableAltException.prototype = Error.prototype
 
-    export function NotAllInputParsedException(message:string, token:ISimpleTokenOrIToken) {
+    export function NotAllInputParsedException(message:string, token?:ISimpleTokenOrIToken) {
         this.name = NOT_ALL_INPUT_PARSED_EXCEPTION
         this.message = message
         this.token = token

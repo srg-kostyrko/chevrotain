@@ -291,3 +291,4 @@ export function isSimpleTokenType(tokType:TokenConstructor):boolean {
     return SimpleLazyToken.prototype.isPrototypeOf(tokType.prototype)
 }
 
+

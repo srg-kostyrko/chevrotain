@@ -1,5 +1,5 @@
 import {Parser, EMPTY_ALT, ParserDefinitionErrorType} from "./parse/parser_public"
-import {Lexer, LexerDefinitionErrorType} from "./scan/lexer_public"
+import {Lexer, StreamingLexer, LexerDefinitionErrorType} from "./scan/lexer_public"
 import {
     Token,
     extendToken,
@@ -39,6 +39,7 @@ API.VERSION = "0.17.1"
 API.Parser = Parser
 API.ParserDefinitionErrorType = ParserDefinitionErrorType
 API.Lexer = Lexer
+API.StreamingLexer = StreamingLexer
 API.LexerDefinitionErrorType = LexerDefinitionErrorType
 API.Token = Token
 API.LazyToken = LazyToken

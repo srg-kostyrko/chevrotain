@@ -381,3 +381,21 @@ function checkAlternativesAmbiguities(alternatives:Alternative[]):IAmbiguityDesc
 
     return identicalAmbiguities
 }
+
+export function validateRecoveryConfig(isRecoveryEnabled:boolean, isLexerless:boolean):IParserDefinitionError[] {
+    let errors = []
+    let errMsg
+
+    if (isRecoveryEnabled && isLexerless) {
+        errMsg = `A Lexer Less ("lexerLess" option) parser cannot also enable Error Recovery capabilities ("recoveryEnabled" option).\n` +
+                `Only one of these configuration options may be enabled at the same time.`
+        errors.push({
+            message:  errMsg,
+            type:     ParserDefinitionErrorType.LEXERLESS_WITH_RECOVERY_ENABLED
+        })
+    }
+
+    return errors
+}
+
+

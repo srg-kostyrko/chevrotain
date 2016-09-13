@@ -577,6 +577,7 @@ describe("The empty alternative detection full flow", () => {
             })
 
         }
+
         expect(() => new EmptyAltAmbiguityParser()).to.throw("Ambiguous empty alternative")
         expect(() => new EmptyAltAmbiguityParser()).to.throw("1")
         expect(() => new EmptyAltAmbiguityParser()).to.throw("Only the last alternative may be an empty alternative.")
@@ -593,7 +594,7 @@ describe("The anonymous Parser constructor detection full flow", () => {
         // var foo = function(){}
         // foo.name --> foo (was "" in ES5)
         function generateAnonymousConstructor() {
-            return function(input) {
+            return function (input) {
                 Parser.call(this, input, []);
                 (<any>Parser).performSelfAnalysis(this)
             }
@@ -605,5 +606,29 @@ describe("The anonymous Parser constructor detection full flow", () => {
         expect(() => new AnonymousParser([])).to.throw("constructor may not be an anonymous Function")
     })
 })
+
+
+describe("The invalid parser configuration detection full flow", () => {
+
+    it("will throw an error when a parser has both 'lexerLess' and 'recoveryEnabled' options enabled", () => {
+
+        class BadConfigParser extends Parser {
+
+            constructor(input:Token[] = []) {
+                super(input, [], {
+                    lexerLess:       true,
+                    recoveryEnabled: true
+                });
+                (<any>Parser).performSelfAnalysis(this)
+            }
+
+        }
+
+        expect(() => new BadConfigParser([])).
+        to.throw("A Lexer Less (\"lexerLess\" option) parser cannot also enable Error Recovery capabilities")
+    })
+})
+
+
 
 
