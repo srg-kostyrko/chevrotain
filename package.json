@@ -87,7 +87,7 @@
     "requirejs": "2.3.3",
     "semver": "^5.3.0",
     "tslint": "^4.4.2",
-    "typedoc": "^0.5.5",
+    "typedoc": "0.5.8",
     "typescript": "~2.1.5",
     "webpack": "^2.2.1",
     "webpack-dev-server": "^2.3.0",
