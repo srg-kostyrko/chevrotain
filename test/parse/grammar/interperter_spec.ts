@@ -1,38 +1,39 @@
 import {ITokenGrammarPath} from "../../../src/parse/grammar/path_public"
 import {
-    ActionTok,
     actionDec,
+    actionDecSep,
+    ActionTok,
+    atLeastOneRule,
+    atLeastOneSepRule,
+    callArguments,
+    ColonTok,
+    CommaTok,
+    DotTok,
     IdentTok,
     LParenTok,
-    RParenTok,
-    ColonTok,
-    SemicolonTok,
     LSquareTok,
-    RSquareTok,
-    DotTok,
-    CommaTok,
     paramSpec,
-    callArguments,
-    actionDecSep,
-    atLeastOneRule,
     qualifiedNameSep,
-    atLeastOneSepRule
+    RParenTok,
+    RSquareTok,
+    SemicolonTok
 } from "./samples"
 import {
     NextAfterTokenWalker,
-    NextTerminalAfterAtLeastOneWalker,
-    NextTerminalAfterManyWalker,
-    NextTerminalAfterManySepWalker,
+    nextPossibleTokensAfter,
     NextTerminalAfterAtLeastOneSepWalker,
-    possiblePathsFrom,
-    nextPossibleTokensAfter
+    NextTerminalAfterAtLeastOneWalker,
+    NextTerminalAfterManySepWalker,
+    NextTerminalAfterManyWalker,
+    possiblePathsFrom
 } from "../../../src/parse/grammar/interpreter"
-import {setEquality, createRegularToken} from "../../utils/matchers"
+import {createRegularToken, setEquality} from "../../utils/matchers"
 import {gast} from "../../../src/parse/grammar/gast_public"
-import {Token, IToken} from "../../../src/scan/tokens_public"
+import {createToken, IToken, Token} from "../../../src/scan/tokens_public"
 import {map} from "../../../src/utils/utils"
 import {TokenConstructor} from "../../../src/scan/lexer_public"
 import {augmentTokenClasses, tokenStructuredMatcher} from "../../../src/scan/tokens"
+import {Parser} from "../../../src/parse/parser_public"
 
 let RepetitionMandatory = gast.RepetitionMandatory
 let Terminal = gast.Terminal
@@ -882,5 +883,51 @@ describe("The chevrotain grammar interpreter capabilities", () => {
             expect(nextPossibleTokensAfter(seq, INPUT([Alpha, Beta, Gamma]), tokenStructuredMatcher, 5)).to.be.empty
         })
     })
+})
 
+describe("issue 391 - WITH_SEP variants do not take SEP into account in lookahead", () => {
+    it("Reproduce issue", () => {
+
+        const LParen = createToken({name: "LParen", pattern: /\(/})
+        const RParen = createToken({name: "RParen", pattern: /\)/})
+        const Comma = createToken({name: "Comma", pattern: /,/});
+        const FatArrow = createToken({name: "FatArrow", pattern: /=>/})
+        const Identifier = createToken({name: "Identifier", pattern: /[a-zA-Z]+/})
+
+
+        class Issue391Parser extends Parser {
+            constructor(input:Token[] = []) {
+                super(input, [LParen, RParen, Comma, FatArrow, Identifier], {maxLookahead: 4});
+                (Parser as any).performSelfAnalysis(this)
+            }
+
+            orRule = this.RULE("orRule", () => {
+                return this.OR1([
+                    {
+                        // Parenthesis Expression
+                        ALT: () => {
+                            this.CONSUME2(LParen)
+                            this.CONSUME2(Identifier)
+                            this.CONSUME2(LParen)
+                        }
+                    },
+                    {
+                        // Lambda Function
+                        ALT: () => {
+                            this.CONSUME1(LParen)
+                            this.MANY_SEP({
+                                SEP: Comma,
+                                DEF: () => {
+                                    this.CONSUME1(Identifier)
+                                }
+                            })
+                            this.CONSUME1(LParen)
+                            this.CONSUME1(FatArrow)
+                        }
+                    }
+                ])
+            })
+
+        }
+    })
 })
